@@ -4,10 +4,50 @@ from starkware.cairo.common.dict_access import DictAccess
 from starkware.cairo.common.squash_dict import squash_dict
 from starkware.cairo.common.serialize import serialize_word
 from starkware.cairo.common.alloc import alloc
+from starkware.cairo.common.math import assert_nn_le
+
+# #### STRUCTS #### #
+
+struct KeyValue:
+    member key : felt
+    member value : felt
+end
 
 struct Location:
     member row : felt
     member col : felt
+end
+
+# #### UTILS #### #
+
+# Returns the value associated with the given key.
+func get_value_by_key{range_check_ptr}(list : KeyValue*, size, key) -> (value):
+    alloc_locals
+    local idx
+    %{
+        # Populate idx using a hint.
+        ENTRY_SIZE = ids.KeyValue.SIZE
+        KEY_OFFSET = ids.KeyValue.key
+        VALUE_OFFSET = ids.KeyValue.value
+        for i in range(ids.size):
+            addr = ids.list.address_ + ENTRY_SIZE * i + KEY_OFFSET
+            if memory[addr] == ids.key:
+                ids.idx = i
+                break
+        else:
+            raise Exception(
+                f'Key {ids.key} was not found in the list.')
+    %}
+
+    # Verify that we have the correct key.
+    let item : KeyValue = list[idx]
+    assert item.key = key
+
+    # Verify that the index is in range (0 <= idx <= size - 1).
+    assert_nn_le(a=idx, b=size - 1)
+
+    # Return the corresponding value.
+    return (value=item.value)
 end
 
 func build_dict(loc_list : Location*, tile_list : felt*, n_steps, dict : DictAccess*) -> (
@@ -35,7 +75,64 @@ func build_dict(loc_list : Location*, tile_list : felt*, n_steps, dict : DictAcc
         n_steps=n_steps - 1,
         dict=dict + DictAccess.SIZE)
 end
+func build_dict(list : KeyValue*, size, dict : DictAccess*) -> (dict):
+    if size == 0:
+        return (dict=dict)
+    end
+    alloc_locals
+    local loc_list
+    local next_loc
 
+    %{
+        ENTRY_SIZE = ids.KeyValue.SIZE
+        KEY_OFFSET = ids.KeyValue.key
+        VALUE_OFFSET = ids.KeyValue.value
+
+        loc_list=list
+        # Populate ids.dict.prev_value using cumulative_sums...
+        # Add list.value to cumulative_sums[list.key]...
+        for i in enumerate(ids.size):
+          ids.dict.prev_value = loc_list[i].value + loc_list[i - 1].value
+          addr = ids.list.address_ + ENTRY_SIZE * i + \
+                KEY_OFFSET
+            if memory[addr] == ids.key:
+                ids.idx = i
+                break
+        next_loc = loc_list.SIZE +
+    %}
+
+    # Copy list.key to dict.key...
+    # Verify that dict.new_value = dict.prev_value + list.value...
+    # Call recursively to build_dict()...
+    build_dict(list=
+end
+
+func verify_and_output_squashed_dict(
+        squashed_dict : DictAccess*, squashed_dict_end : DictAccess*, result : KeyValue*) -> (
+        result):
+    tempvar diff = squashed_dict_end - squashed_dict
+    if diff == 0:
+        return (result=result)
+    end
+end
+
+# returns sum of key values with same key
+
+func sum_by_key{range_checj_ptr}(list : KeyValue*, size, dict : KeyValue*) -> (
+        dict):
+        alloc_locals
+        local
+        if size == 0:
+            return (dict=dict)
+
+        %{
+
+        %}
+        build_dict(dict)
+        squash_dict(dict)
+        verify_and_output_squashed_dict(dict)
+        return (dict)
+end
 func finalize_state(dict : DictAccess*, idx) -> (dict : DictAccess*):
     if idx == 0:
         return (dict=dict)
@@ -146,22 +243,35 @@ func check_solution{output_ptr : felt*, range_check_ptr}(
     return ()
 end
 
+# #### MAIN #### #
+
 func main{output_ptr : felt*, range_check_ptr}():
     alloc_locals
 
-    local loc_tuple : (Location, Location, Location, Location, Location) = (
-        Location(row=0, col=2),
-        Location(row=1, col=2),
-        Location(row=1, col=3),
-        Location(row=2, col=3),
-        Location(row=3, col=3),
-        )
+    # Declare two vars pointing to the two lists and another var that contains the number of steps.
+    local loc_list : Location*
+    local tile_list : felt*
+    local n_steps
 
-    local tiles : (felt, felt, felt, felt) = (3, 7, 8, 12)
+    %{
+        #  use a hint to populate them fields allocated above
+        locations = program_input['loc_list']
+        tiles = program_input['tile_list']
 
-    # Get the value of the frame pointer register (fp) so that
-    # we can use the address of loc0.
-    let (__fp__, _) = get_fp_and_pc()
-    check_solution(loc_list=cast(&loc_tuple, Location*), tile_list=cast(&tiles, felt*), n_steps=4)
+        ids.loc_list = loc_list = segments.add()
+        for i, val in enumerate(locations):
+            memory[loc_list + i] = val
+
+        ids.tile_list = tile_list = segments.add()
+        for i, val in enumerate(tiles):
+            memory[tile_list + i] = val
+
+        ids.n_steps = len(tiles)
+
+        # Sanity check (only the prover runs this check).
+        assert len(locations) == 2 * (len(tiles) + 1)
+    %}
+
+    check_solution(loc_list=loc_list, tile_list=tile_list, n_steps=n_steps)
     return ()
 end
